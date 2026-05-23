@@ -12,6 +12,7 @@
 #include <cmath>
 #include <algorithm>
 #include <vector>
+#include <cstdio>
 
 #define ABS(x) ((x >= 0) ? x : -x)
 
@@ -176,86 +177,64 @@ void ImTui_ImplText_RenderDrawData(ImDrawData * drawData, ImTui::TScreen * scree
                     float lastCharX = -10000.0f;
                     float lastCharY = -10000.0f;
 
-                    for (unsigned int idx = 0; idx < pcmd->ElemCount; idx += 3) {
-                        // Each triangle: read 3 consecutive indices from the index buffer
-                        // Note: VtxOffset is added to get correct vertex position in larger meshes (>64K vertices)
-                        const unsigned int vtxBase = pcmd->VtxOffset;
-                        
-                        ImDrawIdx vidx0_raw = cmd_list->IdxBuffer[pcmd->IdxOffset + idx + 0];
-                        ImDrawIdx vidx1_raw = cmd_list->IdxBuffer[pcmd->IdxOffset + idx + 1];
-                        ImDrawIdx vidx2_raw = cmd_list->IdxBuffer[pcmd->IdxOffset + idx + 2];
+                    // ImGui renders text as quads (2 triangles per character).
+                    // Each quad has 6 indices: [0,1,2] for first triangle, [3,4,5] for second.
+                    // For text rendering, each vertex has unique UV coordinates pointing to 
+                    // its glyph position in the font atlas texture.
+                    
+                    const unsigned int vtxBase = pcmd->VtxOffset;
+
+                    if (pcmd->ElemCount >= 6) {
+                        // Read first triangle indices
+                        ImDrawIdx vidx0_raw = cmd_list->IdxBuffer[pcmd->IdxOffset + 0];
+                        ImDrawIdx vidx1_raw = cmd_list->IdxBuffer[pcmd->IdxOffset + 1];
+                        ImDrawIdx vidx2_raw = cmd_list->IdxBuffer[pcmd->IdxOffset + 2];
 
                         int vidx0 = (int)vidx0_raw + vtxBase;
                         int vidx1 = (int)vidx1_raw + vtxBase;
                         int vidx2 = (int)vidx2_raw + vtxBase;
 
-                        // Safety check: ensure indices are within bounds
-                        if (vidx0 < 0 || vidx1 < 0 || vidx2 < 0 ||
-                            vidx0 >= (int)cmd_list->VtxBuffer.Size ||
-                            vidx1 >= (int)cmd_list->VtxBuffer.Size ||
-                            vidx2 >= (int)cmd_list->VtxBuffer.Size) {
-                            continue; // Skip invalid triangles
-                        }
+                        // Read second triangle indices  
+                        ImDrawIdx vvidx0_raw = cmd_list->IdxBuffer[pcmd->IdxOffset + 3];
+                        ImDrawIdx vvidx1_raw = cmd_list->IdxBuffer[pcmd->IdxOffset + 4];
+                        ImDrawIdx vvidx2_raw = cmd_list->IdxBuffer[pcmd->IdxOffset + 5];
 
-                        auto pos0 = cmd_list->VtxBuffer[vidx0].pos;
-                        auto pos1 = cmd_list->VtxBuffer[vidx1].pos;
-                        auto pos2 = cmd_list->VtxBuffer[vidx2].pos;
+                        int vvidx0 = (int)vvidx0_raw + vtxBase;
+                        int vvidx1 = (int)vvidx1_raw + vtxBase;
+                        int vvidx2 = (int)vvidx2_raw + vtxBase;
 
-                        // Clamp positions to clip rect
-                        pos0.x = std::max(std::min(float(clip_rect.z - 1), pos0.x), clip_rect.x);
-                        pos1.x = std::max(std::min(float(clip_rect.z - 1), pos1.x), clip_rect.x);
-                        pos2.x = std::max(std::min(float(clip_rect.z - 1), pos2.x), clip_rect.x);
-                        pos0.y = std::max(std::min(float(clip_rect.w - 1), pos0.y), clip_rect.y);
-                        pos1.y = std::max(std::min(float(clip_rect.w - 1), pos1.y), clip_rect.y);
-                        pos2.y = std::max(std::min(float(clip_rect.w - 1), pos2.y), clip_rect.y);
+                        // Validate all vertex indices are within bounds
+                        if (vidx0 >= 0 && vidx1 >= 0 && vidx2 >= 0 && 
+                            vidx0 < (int)cmd_list->VtxBuffer.Size && 
+                            vidx1 < (int)cmd_list->VtxBuffer.Size && 
+                            vidx2 < (int)cmd_list->VtxBuffer.Size &&
+                            vvidx0 >= 0 && vvidx1 >= 0 && vvidx2 >= 0 &&
+                            vvidx0 < (int)cmd_list->VtxBuffer.Size && 
+                            vvidx1 < (int)cmd_list->VtxBuffer.Size && 
+                            vvidx2 < (int)cmd_list->VtxBuffer.Size) {
 
-                        auto uv0 = cmd_list->VtxBuffer[vidx0].uv;
-                        auto uv1 = cmd_list->VtxBuffer[vidx1].uv;
-                        auto uv2 = cmd_list->VtxBuffer[vidx2].uv;
+                            auto pos0 = cmd_list->VtxBuffer[vidx0].pos;
+                            auto pos1 = cmd_list->VtxBuffer[vidx1].pos;
+                            auto pos2 = cmd_list->VtxBuffer[vidx2].pos;
+                            auto ppos0 = cmd_list->VtxBuffer[vvidx0].pos;
+                            auto ppos1 = cmd_list->VtxBuffer[vvidx1].pos;
+                            auto ppos2 = cmd_list->VtxBuffer[vvidx2].pos;
 
-                        auto col0 = cmd_list->VtxBuffer[vidx0].col;
+                            // Clamp positions to clip rect
+                            pos0.x = std::max(std::min(float(clip_rect.z - 1), pos0.x), clip_rect.x);
+                            pos1.x = std::max(std::min(float(clip_rect.z - 1), pos1.x), clip_rect.x);
+                            pos2.x = std::max(std::min(float(clip_rect.z - 1), pos2.x), clip_rect.x);
+                            pos0.y = std::max(std::min(float(clip_rect.w - 1), pos0.y), clip_rect.y);
+                            pos1.y = std::max(std::min(float(clip_rect.w - 1), pos1.y), clip_rect.y);
+                            pos2.y = std::max(std::min(float(clip_rect.w - 1), pos2.y), clip_rect.y);
 
-                        // Check if this is a text quad (two triangles with different UVs per vertex)
-                        // Text quads have 6 vertices where the second triangle has different UVs from the first
-                        bool isTextQuad = false;
-                        ImVec2 ppos0, ppos1, ppos2;
-                        
-                        if (idx + 5 < pcmd->ElemCount) {
-                            ImDrawIdx vvidx0_raw = cmd_list->IdxBuffer[pcmd->IdxOffset + idx + 3];
-                            ImDrawIdx vvidx1_raw = cmd_list->IdxBuffer[pcmd->IdxOffset + idx + 4];
-                            ImDrawIdx vvidx2_raw = cmd_list->IdxBuffer[pcmd->IdxOffset + idx + 5];
+                            auto col0 = cmd_list->VtxBuffer[vidx0].col;
 
-                            int vvidx0 = (int)vvidx0_raw + vtxBase;
-                            int vvidx1 = (int)vvidx1_raw + vtxBase;
-                            int vvidx2 = (int)vvidx2_raw + vtxBase;
-
-                            if (vvidx0 >= 0 && vvidx1 >= 0 && vvidx2 >= 0 &&
-                                vvidx0 < (int)cmd_list->VtxBuffer.Size &&
-                                vvidx1 < (int)cmd_list->VtxBuffer.Size &&
-                                vvidx2 < (int)cmd_list->VtxBuffer.Size) {
-                                
-                                ppos0 = cmd_list->VtxBuffer[vvidx0].pos;
-                                ppos1 = cmd_list->VtxBuffer[vvidx1].pos;
-                                ppos2 = cmd_list->VtxBuffer[vvidx2].pos;
-
-                                ImVec2 uvA0 = cmd_list->VtxBuffer[vvidx0].uv;
-                                ImVec2 uvA1 = cmd_list->VtxBuffer[vvidx1].uv;
-                                ImVec2 uvA2 = cmd_list->VtxBuffer[vvidx2].uv;
-
-                                // Check if second triangle has different UVs (text quad indicator)
-                                if (uv0.x != uvA0.x || uv0.y != uvA0.y ||
-                                    uv1.x != uvA1.x || uv1.y != uvA1.y ||
-                                    uv2.x != uvA2.x || uv2.y != uvA2.y) {
-                                    isTextQuad = true;
-                                }
-                            }
-                        }
-
-                        if (isTextQuad) {
-                            // Text quad: average position of all 6 vertices for character placement
+                            // Calculate character position as average of all quad vertices
                             float x = ((pos0.x + pos1.x + pos2.x + ppos0.x + ppos1.x + ppos2.x)/6.0f);
                             float y = ((pos0.y + pos1.y + pos2.y + ppos0.y + ppos1.y + ppos2.y)/6.0f) + 0.5f;
 
+                            // Handle consecutive characters at same Y position
                             if (std::fabs(y - lastCharY) < 0.5f && std::fabs(x - lastCharX) < 0.5f) {
                                 x = lastCharX + 1.0f;
                                 y = lastCharY;
@@ -266,22 +245,22 @@ void ImTui_ImplText_RenderDrawData(ImDrawData * drawData, ImTui::TScreen * scree
 
                             int xx = (int)x + 1;
                             int yy = (int)y;
-                            if (xx >= (int)clip_rect.x && xx < (int)clip_rect.z &&
+                            if (xx >= (int)clip_rect.x && xx < (int)clip_rect.z && 
                                 yy >= (int)clip_rect.y && yy < (int)clip_rect.w) {
                                 auto & cell = screen->data[yy*screen->nx + xx];
-                                // TCell layout: 0xRRGGBBAA where:
-                                //   bits 0-15: character code
-                                //   bits 16-23: foreground color (ANSI)
-                                //   bits 24-31: background color / alpha
-                                cell &= 0xFF00FFFF;           // Clear only foreground color (bits 16-23), preserve char and bg
+                                // TCell layout: bits 0-15=char, 16-23=forground color, 24-31=background/alpha
+                                cell &= 0xFF00FFFF;           // Clear foreground (bits 16-23)  
                                 cell |= ' ';                  // Set character to space as default
-                                cell |= ((ImTui::TCell)(rgbToAnsi256(col0, false)) << 16);  // Foreground ANSI color in bits 16-23
+                                cell |= ((ImTui::TCell)(rgbToAnsi256(col0, false)) << 16);  // Foreground color in bits 16-23
                             }
-                            idx += 3; // Skip the second triangle of this quad
                         } else {
-                            // Regular triangle: draw it with color
-                            drawTriangle(pos0, pos1, pos2, rgbToAnsi256(col0, true), screen);
+                            fprintf(stderr, "DEBUG: Invalid vertex indices! vidx=%d,%d,%d vvidx=%d,%d,%d VtxBuffer.Size=%d\n", 
+                                vidx0, vidx1, vidx2, vvidx0, vvidx1, vvidx2, (int)cmd_list->VtxBuffer.Size);
                         }
+
+                        // Skip past this quad's 6 indices to next character
+                    } else {
+                        fprintf(stderr, "DEBUG: ElemCount=%d too small\n", pcmd->ElemCount);
                     }
                 }
             }
@@ -312,42 +291,10 @@ bool ImTui_ImplText_Init() {
     ImGui::GetStyle().ColumnsMinSpacing       = 1.0f;
     ImGui::GetStyle().ScrollbarSize           = 0.5f;
     ImGui::GetStyle().ScrollbarRounding       = 0.0f;
-    ImGui::GetStyle().GrabMinSize             = 0.1f;
-    ImGui::GetStyle().GrabRounding            = 0.0f;
-    ImGui::GetStyle().TabRounding             = 0.0f;
-    ImGui::GetStyle().TabBorderSize           = 0.0f;
-    ImGui::GetStyle().ColorButtonPosition     = ImGuiDir_Right;
-    ImGui::GetStyle().ButtonTextAlign         = ImVec2(0.5f,0.0f);
-    ImGui::GetStyle().SelectableTextAlign     = ImVec2(0.0f,0.0f);
-    ImGui::GetStyle().DisplayWindowPadding    = ImVec2(0.0f,0.0f);
-    ImGui::GetStyle().DisplaySafeAreaPadding  = ImVec2(0.0f,0.0f);
-    ImGui::GetStyle().CellPadding             = ImVec2(1.0f,0.0f);
-    ImGui::GetStyle().MouseCursorScale        = 1.0f;
-    ImGui::GetStyle().AntiAliasedLines        = false;
-    ImGui::GetStyle().AntiAliasedFill         = false;
-    ImGui::GetStyle().CurveTessellationTol    = 1.25f;
-
-    ImGui::GetStyle().Colors[ImGuiCol_WindowBg]         = ImVec4(0.15, 0.15, 0.15, 1.0f);
-    ImGui::GetStyle().Colors[ImGuiCol_TitleBg]          = ImVec4(0.35, 0.35, 0.35, 1.0f);
-    ImGui::GetStyle().Colors[ImGuiCol_TitleBgCollapsed] = ImVec4(0.15, 0.15, 0.15, 1.0f);
-    ImGui::GetStyle().Colors[ImGuiCol_TextSelectedBg]   = ImVec4(0.75, 0.75, 0.75, 0.5f);
-    ImGui::GetStyle().Colors[ImGuiCol_NavHighlight]     = ImVec4(0.00, 0.00, 0.00, 0.0f);
-
-    ImFontConfig fontConfig;
-    fontConfig.GlyphMinAdvanceX = 1.0f;
-    fontConfig.SizePixels = 1.00;
-    ImGui::GetIO().Fonts->AddFontDefault(&fontConfig);
-
-    // Build atlas
-    unsigned char* tex_pixels = NULL;
-    int tex_w, tex_h;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&tex_pixels, &tex_w, &tex_h);
 
     return true;
 }
 
-void ImTui_ImplText_Shutdown() {
-}
+void ImTui_ImplText_Shutdown() {}
 
-void ImTui_ImplText_NewFrame() {
-}
+void ImTui_ImplText_NewFrame() {}
