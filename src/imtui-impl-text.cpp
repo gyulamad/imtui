@@ -176,15 +176,32 @@ void ImTui_ImplText_RenderDrawData(ImDrawData * drawData, ImTui::TScreen * scree
                     float lastCharX = -10000.0f;
                     float lastCharY = -10000.0f;
 
-                    for (unsigned int i = 0; i < pcmd->ElemCount; i += 3) {
-                        int vidx0 = cmd_list->IdxBuffer[pcmd->IdxOffset + i + 0];
-                        int vidx1 = cmd_list->IdxBuffer[pcmd->IdxOffset + i + 1];
-                        int vidx2 = cmd_list->IdxBuffer[pcmd->IdxOffset + i + 2];
+                    for (unsigned int idx = 0; idx < pcmd->ElemCount; idx += 3) {
+                        // Each triangle: read 3 consecutive indices from the index buffer
+                        // Note: VtxOffset is added to get correct vertex position in larger meshes (>64K vertices)
+                        const unsigned int vtxBase = pcmd->VtxOffset;
+                        
+                        ImDrawIdx vidx0_raw = cmd_list->IdxBuffer[pcmd->IdxOffset + idx + 0];
+                        ImDrawIdx vidx1_raw = cmd_list->IdxBuffer[pcmd->IdxOffset + idx + 1];
+                        ImDrawIdx vidx2_raw = cmd_list->IdxBuffer[pcmd->IdxOffset + idx + 2];
+
+                        int vidx0 = (int)vidx0_raw + vtxBase;
+                        int vidx1 = (int)vidx1_raw + vtxBase;
+                        int vidx2 = (int)vidx2_raw + vtxBase;
+
+                        // Safety check: ensure indices are within bounds
+                        if (vidx0 < 0 || vidx1 < 0 || vidx2 < 0 ||
+                            vidx0 >= (int)cmd_list->VtxBuffer.Size ||
+                            vidx1 >= (int)cmd_list->VtxBuffer.Size ||
+                            vidx2 >= (int)cmd_list->VtxBuffer.Size) {
+                            continue; // Skip invalid triangles
+                        }
 
                         auto pos0 = cmd_list->VtxBuffer[vidx0].pos;
                         auto pos1 = cmd_list->VtxBuffer[vidx1].pos;
                         auto pos2 = cmd_list->VtxBuffer[vidx2].pos;
 
+                        // Clamp positions to clip rect
                         pos0.x = std::max(std::min(float(clip_rect.z - 1), pos0.x), clip_rect.x);
                         pos1.x = std::max(std::min(float(clip_rect.z - 1), pos1.x), clip_rect.x);
                         pos2.x = std::max(std::min(float(clip_rect.z - 1), pos2.x), clip_rect.x);
@@ -197,19 +214,45 @@ void ImTui_ImplText_RenderDrawData(ImDrawData * drawData, ImTui::TScreen * scree
                         auto uv2 = cmd_list->VtxBuffer[vidx2].uv;
 
                         auto col0 = cmd_list->VtxBuffer[vidx0].col;
-                        //auto col1 = cmd_list->VtxBuffer[vidx1].col;
-                        //auto col2 = cmd_list->VtxBuffer[vidx2].col;
 
-                        if (uv0.x != uv1.x || uv0.x != uv2.x || uv1.x != uv2.x ||
-                            uv0.y != uv1.y || uv0.y != uv2.y || uv1.y != uv2.y) {
-                            int vvidx0 = cmd_list->IdxBuffer[pcmd->IdxOffset + i + 3];
-                            int vvidx1 = cmd_list->IdxBuffer[pcmd->IdxOffset + i + 4];
-                            int vvidx2 = cmd_list->IdxBuffer[pcmd->IdxOffset + i + 5];
+                        // Check if this is a text quad (two triangles with different UVs per vertex)
+                        // Text quads have 6 vertices where the second triangle has different UVs from the first
+                        bool isTextQuad = false;
+                        ImVec2 ppos0, ppos1, ppos2;
+                        
+                        if (idx + 5 < pcmd->ElemCount) {
+                            ImDrawIdx vvidx0_raw = cmd_list->IdxBuffer[pcmd->IdxOffset + idx + 3];
+                            ImDrawIdx vvidx1_raw = cmd_list->IdxBuffer[pcmd->IdxOffset + idx + 4];
+                            ImDrawIdx vvidx2_raw = cmd_list->IdxBuffer[pcmd->IdxOffset + idx + 5];
 
-                            auto ppos0 = cmd_list->VtxBuffer[vvidx0].pos;
-                            auto ppos1 = cmd_list->VtxBuffer[vvidx1].pos;
-                            auto ppos2 = cmd_list->VtxBuffer[vvidx2].pos;
+                            int vvidx0 = (int)vvidx0_raw + vtxBase;
+                            int vvidx1 = (int)vvidx1_raw + vtxBase;
+                            int vvidx2 = (int)vvidx2_raw + vtxBase;
 
+                            if (vvidx0 >= 0 && vvidx1 >= 0 && vvidx2 >= 0 &&
+                                vvidx0 < (int)cmd_list->VtxBuffer.Size &&
+                                vvidx1 < (int)cmd_list->VtxBuffer.Size &&
+                                vvidx2 < (int)cmd_list->VtxBuffer.Size) {
+                                
+                                ppos0 = cmd_list->VtxBuffer[vvidx0].pos;
+                                ppos1 = cmd_list->VtxBuffer[vvidx1].pos;
+                                ppos2 = cmd_list->VtxBuffer[vvidx2].pos;
+
+                                ImVec2 uvA0 = cmd_list->VtxBuffer[vvidx0].uv;
+                                ImVec2 uvA1 = cmd_list->VtxBuffer[vvidx1].uv;
+                                ImVec2 uvA2 = cmd_list->VtxBuffer[vvidx2].uv;
+
+                                // Check if second triangle has different UVs (text quad indicator)
+                                if (uv0.x != uvA0.x || uv0.y != uvA0.y ||
+                                    uv1.x != uvA1.x || uv1.y != uvA1.y ||
+                                    uv2.x != uvA2.x || uv2.y != uvA2.y) {
+                                    isTextQuad = true;
+                                }
+                            }
+                        }
+
+                        if (isTextQuad) {
+                            // Text quad: average position of all 6 vertices for character placement
                             float x = ((pos0.x + pos1.x + pos2.x + ppos0.x + ppos1.x + ppos2.x)/6.0f);
                             float y = ((pos0.y + pos1.y + pos2.y + ppos0.y + ppos1.y + ppos2.y)/6.0f) + 0.5f;
 
@@ -221,17 +264,18 @@ void ImTui_ImplText_RenderDrawData(ImDrawData * drawData, ImTui::TScreen * scree
                             lastCharX = x;
                             lastCharY = y;
 
-                            int xx = (x) + 1;
-                            int yy = (y) + 0;
-                            if (xx < clip_rect.x || xx >= clip_rect.z || yy < clip_rect.y || yy >= clip_rect.w) {
-                            } else {
+                            int xx = (int)x + 1;
+                            int yy = (int)y;
+                            if (xx >= (int)clip_rect.x && xx < (int)clip_rect.z &&
+                                yy >= (int)clip_rect.y && yy < (int)clip_rect.w) {
                                 auto & cell = screen->data[yy*screen->nx + xx];
                                 cell &= 0xFF000000;
                                 cell |= (col0 & 0xff000000) >> 24;
                                 cell |= ((ImTui::TCell)(rgbToAnsi256(col0, false)) << 16);
                             }
-                            i += 3;
+                            idx += 3; // Skip the second triangle of this quad
                         } else {
+                            // Regular triangle: draw it with color
                             drawTriangle(pos0, pos1, pos2, rgbToAnsi256(col0, true), screen);
                         }
                     }
