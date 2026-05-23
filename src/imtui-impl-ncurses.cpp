@@ -35,6 +35,38 @@
 #include <thread>
 
 namespace {
+    // Map ncurses key codes to ImGuiKey enum values (ImGui 1.87+ API)
+    static ImGuiKey NcursesKeyToImGuiKey(int keycode) {
+        switch (keycode) {
+            case KEY_LEFT:     return ImGuiKey_LeftArrow;
+            case KEY_RIGHT:    return ImGuiKey_RightArrow;
+            case KEY_UP:       return ImGuiKey_UpArrow;
+            case KEY_DOWN:     return ImGuiKey_DownArrow;
+            case KEY_HOME:     return ImGuiKey_Home;
+            case KEY_END:      return ImGuiKey_End;
+            case KEY_PPAGE:    return ImGuiKey_PageUp;
+            case KEY_NPAGE:    return ImGuiKey_PageDown;
+            case KEY_BACKSPACE:return ImGuiKey_Backspace;
+            case KEY_DC:       return ImGuiKey_Delete;
+            case KEY_IC:       return ImGuiKey_Insert;
+            default:           return ImGuiKey_None;
+        }
+    }
+
+    // Map ASCII control characters to their corresponding ImGuiKey values
+    static ImGuiKey AsciiToImGuiKey(int c) {
+        if (c >= 'A' && c <= 'Z') {
+            return static_cast<ImGuiKey>(ImGuiKey_A + (c - 'A'));
+        }
+        if (c >= 'a' && c <= 'z') {
+            return static_cast<ImGuiKey>(ImGuiKey_A + (c - 'a'));
+        }
+        if (c >= '0' && c <= '9') {
+            return static_cast<ImGuiKey>(ImGuiKey_0 + (c - '0'));
+        }
+        return ImGuiKey_None;
+    }
+
     struct VSync {
         VSync(double fps_active = 60.0, double fps_idle = 60.0) :
             tStepActive_us(1000000.0/fps_active),
@@ -119,29 +151,7 @@ ImTui::TScreen * ImTui_ImplNcurses_Init(bool mouseSupport, float fps_active, flo
         printf("\033[?1003h\n");
     }
 
-    ImGui::GetIO().KeyMap[ImGuiKey_Tab]         = 9;
-    ImGui::GetIO().KeyMap[ImGuiKey_LeftArrow]   = 260;
-    ImGui::GetIO().KeyMap[ImGuiKey_RightArrow]  = 261;
-    ImGui::GetIO().KeyMap[ImGuiKey_UpArrow]     = 259;
-    ImGui::GetIO().KeyMap[ImGuiKey_DownArrow]   = 258;
-    ImGui::GetIO().KeyMap[ImGuiKey_PageUp]      = 339;
-    ImGui::GetIO().KeyMap[ImGuiKey_PageDown]    = 338;
-    ImGui::GetIO().KeyMap[ImGuiKey_Home]        = 262;
-    ImGui::GetIO().KeyMap[ImGuiKey_End]         = 360;
-    ImGui::GetIO().KeyMap[ImGuiKey_Insert]      = 331;
-    ImGui::GetIO().KeyMap[ImGuiKey_Delete]      = 330;
-    ImGui::GetIO().KeyMap[ImGuiKey_Backspace]   = 263;
-    ImGui::GetIO().KeyMap[ImGuiKey_Space]       = 32;
-    ImGui::GetIO().KeyMap[ImGuiKey_Enter]       = 10;
-    ImGui::GetIO().KeyMap[ImGuiKey_Escape]      = 27;
-    ImGui::GetIO().KeyMap[ImGuiKey_KeyPadEnter] = 343;
-    ImGui::GetIO().KeyMap[ImGuiKey_A]           = 1;
-    ImGui::GetIO().KeyMap[ImGuiKey_C]           = 3;
-    ImGui::GetIO().KeyMap[ImGuiKey_V]           = 22;
-    ImGui::GetIO().KeyMap[ImGuiKey_X]           = 24;
-    ImGui::GetIO().KeyMap[ImGuiKey_Y]           = 25;
-    ImGui::GetIO().KeyMap[ImGuiKey_Z]           = 26;
-
+    // ImGui 1.87+ no longer uses KeyMap[] - key codes ARE the ImGuiKey enum values directly
     ImGui::GetIO().KeyRepeatDelay = 0.050;
     ImGui::GetIO().KeyRepeatRate = 0.050;
 
@@ -185,11 +195,11 @@ bool ImTui_ImplNcurses_NewFrame() {
 
     input[2] = 0;
 
-    auto & keysDown = ImGui::GetIO().KeysDown;
-    std::fill(keysDown, keysDown + 512, 0);
-
-    ImGui::GetIO().KeyCtrl = false;
-    ImGui::GetIO().KeyShift = false;
+    // ImGui 1.87+ uses AddKeyEvent() instead of legacy KeysDown[] array and KeyMap[]
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_LeftCtrl, false);
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_RightCtrl, false);
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_LeftShift, false);
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_RightShift, false);
 
     while (true) {
         int c = wgetch(stdscr);
@@ -211,59 +221,49 @@ bool ImTui_ImplNcurses_NewFrame() {
                 if ((mstate & 0xf000) == 0x2000) rbut = 1;
                 if ((mstate & 0xf000) == 0x1000) rbut = 0;
                 //printf("mstate = 0x%016lx\n", mstate);
-                ImGui::GetIO().KeyCtrl |= ((mstate & 0x0F000000) == 0x01000000);
+                ImGui::GetIO().AddKeyEvent(ImGuiKey_LeftCtrl, (mstate & 0x0F000000) == 0x01000000);
             }
         } else {
             input[0] = (c & 0x000000FF);
             input[1] = (c & 0x0000FF00) >> 8;
             //printf("c = %d, c0 = %d, c1 = %d xxx\n", c, input[0], input[1]);
-            if (c < 127) {
-                if (c != ImGui::GetIO().KeyMap[ImGuiKey_Enter]) {
+            
+            ImGuiKey imguiKey = NcursesKeyToImGuiKey(c);
+            
+            if (imguiKey != ImGuiKey_None) {
+                // Map ncurses special key to ImGuiKey and report event
+                ImGui::GetIO().AddKeyEvent(imguiKey, true);
+                
+                // Report shift modifier for shift+arrow combinations
+                if (c == 393 || c == 402 || c == 337 || c == 336) {
+                    ImGui::GetIO().AddKeyEvent(ImGuiKey_LeftShift, true);
+                }
+            } else if (c == KEY_BACKSPACE || c == 127) {
+                ImGui::GetIO().AddKeyEvent(ImGuiKey_Backspace, true);
+            } else if (c < 127 && c > 0) {
+                // Regular ASCII character input or control key
+                if (c != 10) {  // Skip Enter/CR - let it be processed as a key event below
                     ImGui::GetIO().AddInputCharactersUTF8(input);
                 }
-            }
-            if (c == 330) {
-                ImGui::GetIO().KeysDown[ImGui::GetIO().KeyMap[ImGuiKey_Delete]] = true;
-            } else if (c == KEY_BACKSPACE || c == KEY_DC || c == 127) {
-                ImGui::GetIO().KeysDown[ImGui::GetIO().KeyMap[ImGuiKey_Backspace]] = true;
-            // Shift + arrows (probably not portable :()
-            } else if (c == 393) {
-                ImGui::GetIO().KeysDown[ImGui::GetIO().KeyMap[ImGuiKey_LeftArrow]] = true;
-                ImGui::GetIO().KeyShift = true;
-            } else if (c == 402) {
-                ImGui::GetIO().KeysDown[ImGui::GetIO().KeyMap[ImGuiKey_RightArrow]] = true;
-                ImGui::GetIO().KeyShift = true;
-            } else if (c == 337) {
-                ImGui::GetIO().KeysDown[ImGui::GetIO().KeyMap[ImGuiKey_UpArrow]] = true;
-                ImGui::GetIO().KeyShift = true;
-            } else if (c == 336) {
-                ImGui::GetIO().KeysDown[ImGui::GetIO().KeyMap[ImGuiKey_DownArrow]] = true;
-                ImGui::GetIO().KeyShift = true;
-            } else if (c == KEY_BACKSPACE) {
-                ImGui::GetIO().KeysDown[ImGui::GetIO().KeyMap[ImGuiKey_Backspace]] = true;
-            } else if (c == KEY_LEFT) {
-                ImGui::GetIO().KeysDown[ImGui::GetIO().KeyMap[ImGuiKey_LeftArrow]] = true;
-            } else if (c == KEY_RIGHT) {
-                ImGui::GetIO().KeysDown[ImGui::GetIO().KeyMap[ImGuiKey_RightArrow]] = true;
-            } else if (c == KEY_UP) {
-                ImGui::GetIO().KeysDown[ImGui::GetIO().KeyMap[ImGuiKey_UpArrow]] = true;
-            } else if (c == KEY_DOWN) {
-                ImGui::GetIO().KeysDown[ImGui::GetIO().KeyMap[ImGuiKey_DownArrow]] = true;
-            } else {
-                keysDown[c] = true;
+                
+                // Report Ctrl modifier and the actual key pressed for clipboard operations etc.
+                if (ImGui::GetIO().KeyCtrl) {
+                    ImGuiKey ctrlCharKey = AsciiToImGuiKey(c);
+                    if (ctrlCharKey != ImGuiKey_None) {
+                        ImGui::GetIO().AddKeyEvent(ImGuiKey_LeftCtrl, true);
+                        ImGui::GetIO().AddKeyEvent(ctrlCharKey, true);
+                    } else {
+                        // Non-letter control character - just add the raw ASCII as key event
+                        ImGui::GetIO().AddKeyEvent(ImGuiKey_LeftCtrl, true);
+                        ImGui::GetIO().AddKeyEvent(static_cast<ImGuiKey>(c), true);
+                    }
+                }
             }
         }
 
         hasInput = true;
     }
-
-    if (ImGui::GetIO().KeysDown[ImGui::GetIO().KeyMap[ImGuiKey_A]]) ImGui::GetIO().KeyCtrl = true;
-    if (ImGui::GetIO().KeysDown[ImGui::GetIO().KeyMap[ImGuiKey_C]]) ImGui::GetIO().KeyCtrl = true;
-    if (ImGui::GetIO().KeysDown[ImGui::GetIO().KeyMap[ImGuiKey_V]]) ImGui::GetIO().KeyCtrl = true;
-    if (ImGui::GetIO().KeysDown[ImGui::GetIO().KeyMap[ImGuiKey_X]]) ImGui::GetIO().KeyCtrl = true;
-    if (ImGui::GetIO().KeysDown[ImGui::GetIO().KeyMap[ImGuiKey_Y]]) ImGui::GetIO().KeyCtrl = true;
-    if (ImGui::GetIO().KeysDown[ImGui::GetIO().KeyMap[ImGuiKey_Z]]) ImGui::GetIO().KeyCtrl = true;
-
+    
     ImGui::GetIO().MousePos.x = mx;
     ImGui::GetIO().MousePos.y = my;
     ImGui::GetIO().MouseDown[0] = lbut;
