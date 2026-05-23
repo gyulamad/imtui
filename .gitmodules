@@ -1,4 +1,4 @@
 [submodule "third-party/imgui/imgui"]
     path = third-party/imgui/imgui
-    url = https://github.com/ggerganov/imgui
+	url = https://github.com/gyulamad/imgui.git
     branch = imtui
