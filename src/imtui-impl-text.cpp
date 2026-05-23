@@ -269,9 +269,13 @@ void ImTui_ImplText_RenderDrawData(ImDrawData * drawData, ImTui::TScreen * scree
                             if (xx >= (int)clip_rect.x && xx < (int)clip_rect.z &&
                                 yy >= (int)clip_rect.y && yy < (int)clip_rect.w) {
                                 auto & cell = screen->data[yy*screen->nx + xx];
-                                cell &= 0xFF000000;
-                                cell |= (col0 & 0xff000000) >> 24;
-                                cell |= ((ImTui::TCell)(rgbToAnsi256(col0, false)) << 16);
+                                // TCell layout: 0xRRGGBBAA where:
+                                //   bits 0-15: character code
+                                //   bits 16-23: foreground color (ANSI)
+                                //   bits 24-31: background color / alpha
+                                cell &= 0xFF00FFFF;           // Clear only foreground color (bits 16-23), preserve char and bg
+                                cell |= ' ';                  // Set character to space as default
+                                cell |= ((ImTui::TCell)(rgbToAnsi256(col0, false)) << 16);  // Foreground ANSI color in bits 16-23
                             }
                             idx += 3; // Skip the second triangle of this quad
                         } else {
